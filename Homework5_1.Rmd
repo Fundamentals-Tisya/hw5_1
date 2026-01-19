@@ -1,0 +1,160 @@
+---
+title: "Homework5_1"
+output: html_notebook
+---
+
+#download necessary libraries
+```{r}
+library(tidyverse) # loads core tools for data cleaning, manipulation, and visualization
+library(readxl) # allows reading excel files directly into R
+library(stringr) # provides simple functions for working with text data
+library(ggplot2) #used for plotting data visualizations
+```
+
+#store downloaded files
+```{r}
+folder <- "/Users/tisyasingh/Homework5/rawfiles" #stores path to folder containing downloaded files
+files <- list.files(folder, pattern = "\\.xlsx$", full.names = TRUE) #keeps and stores files that end in .xlsx
+```
+
+
+#keep desired columns
+```{r}
+#filters columns to keep in each dataset
+target_cols <- c( 
+  "Country", "Year", "Rank", "Total",
+  "C1_Security_Apparatus", "C2_Factionalized_Elites", "C3_Group_Grievance",
+  "E1_Economy", "E2_Economic_Inequality", "E3_Human_Flight_and_Brain_Drain",
+  "P1_State_Legitimacy", "P2_Public_Services", "P3_Human_Rights",
+  "S1_Demographic_Pressures", "S2_Refugees_and_IDPs",
+  "X1_External_Intervention"
+)
+```
+
+#helper function to normalize column names
+```{r}
+normalize_names <- function(nms) { #store normalized column names as normalize_names
+  nms |> #function takes in a vector of column names as nms
+    str_replace_all("[:\\-]+", "_") |> #replace colons or dashes with underscores
+    str_replace_all("\\s+", "_") |> #replace spaces with underscores
+    str_replace_all("__+", "_") |> #collapse multiple underscores into one
+    str_replace_all("_$", "") #remove trailing underscore at the end
+}
+```
+
+#helper function to infer year from file name
+```{r}
+infer_year <- function(path) { #store inferred year as infer_year
+  y <- str_extract(basename(path), "(19|20)\\d{2}") #get filename from path, extract 4-digit year
+  suppressWarnings(as.integer(y)) #convert to integer
+}
+```
+
+#helper function to overall clean a file
+```{r}
+clean_file <- function(path) { #store cleaned file as clean_file
+  sh <- excel_sheets(path)[1] #get first sheet name
+  df <- read_xlsx(path, sheet = sh) #read sheet into a data frame
+
+  names(df) <- normalize_names(names(df)) #clean column names using helper function 
+
+  if (!("Year" %in% names(df))) df$Year <- infer_year_from_filename(path) #if year column missing, infer using helper function
+
+  df <- df |> select(any_of(target_cols)) #keep only columns listed in target_cols
+
+  #make sure all required columns exist
+  missing <- setdiff(target_cols, names(df)) #find columns that are missing
+  if (length(missing) > 0) df[missing] <- NA #add them filled with NA
+
+  df <- df |> select(all_of(target_cols)) #reorder columns to match target_cols
+
+  numeric_cols <- setdiff(target_cols, c("Country", "Year", "Rank")) #define all columns as numeric except specified ones
+
+  #clean values
+  df |>
+    mutate(
+      Country = as.character(Country), #ensure Country is text
+      Year = as.integer(str_extract(as.character(Year), "(19|20)\\d{2}")), #ensure Year is integer
+      Rank = as.integer(str_extract(as.character(Rank), "\\d+")) #ensure Rank is integer
+    ) |>
+    mutate(
+      across(all_of(numeric_cols), #for every numeric column
+             ~ as.numeric(str_extract(as.character(.x), "\\d+\\.?\\d*"))) #turn value into text and extract number with optional decimal
+    )
+}
+```
+
+#read and clean every file individually then append
+```{r}
+dfs_clean <- map(files, clean_file) #store cleaned files
+app_data <- bind_rows(dfs_clean) #append files
+```
+
+#check structure of full dataset 
+```{r}
+glimpse(app_data) #view columns and data types
+stopifnot(is.integer(app_data$Year) || typeof(app_data$Year) == "integer") #check if year is integer
+stopifnot(is.integer(app_data$Rank) || typeof(app_data$Rank) == "integer") #check if rank is integer
+```
+#save appended file
+```{r}
+write_csv(app_data, "app_data.csv") #save as csv
+saveRDS(app_data, "app_data.rds") #save as rds
+```
+
+#Plot the 'Total' Variable per year using boxplots
+```{r}
+ggplot(app_data, aes(x = factor(Year), y = Total)) + #x = Year as categories, y = Total score
+  geom_boxplot() + #draw boxplots
+  labs(
+    title = "Total Fragile States Index Score by Year", #title
+    x = "Year", #x-axis label
+    y = "Total Score" #y-axis label
+  ) +
+  theme_minimal() + #clean theme
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1) #rotate year labels to prevent overlap
+  )
+```
+
+#Plot the 'Total' Variable per year
+```{r}
+ggplot(app_data, aes(x = Year, y = Total)) + #x = numeric Year, y = Total score
+  geom_point(alpha = 0.4) + #plot individual country scores,
+  geom_smooth(se = FALSE) + #add smooth trend line
+  labs(
+    title = "Total Fragile States Index Score by Year", #title
+    x = "Year", #x-axis label
+    y = "Total Score" #y-axis label
+  ) +
+  theme_minimal() #clean theme
+```
+
+#Plot variables "C1_Security_Apparatus, C2_Factionalized_Elites, C3_Group_Grievance" using histograms, 2013 & 2023
+```{r}
+plot_data <- app_data |> #store selected data as plot_data
+  filter(Year %in% c(2013, 2023)) |> #select data from years 2013 and 2023
+  select(Year, #keep selected variables
+         C1_Security_Apparatus,
+         C2_Factionalized_Elites,
+         C3_Group_Grievance) |>
+  pivot_longer( #columns to stack
+    cols = c(C1_Security_Apparatus,
+             C2_Factionalized_Elites,
+             C3_Group_Grievance),
+    names_to = "Variable", #indicator column name
+    values_to = "Value" #score column name
+  )
+
+#histograms for each variable and year
+ggplot(plot_data, aes(x = Value)) + #x=score values
+  geom_histogram(bins = 20) + #draw histograms with 20 bins
+  facet_grid(Year ~ Variable) + #rows=year, columns=variable
+  labs(
+    title = "Histograms of Selected FSI Indicators (2013 vs 2023)", #title
+    x = "Score", #x-axis label 
+    y = "Count" #y-axis label
+  ) +
+  theme_minimal() #clean themea
+```
+
